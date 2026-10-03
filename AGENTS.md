@@ -47,3 +47,24 @@ read `.agents/skills/reposteward-maintainer/SKILL.md`. The skill describes the h
 workflow; the code-enforced safety invariants above remain authoritative.
 For remote branch audits and explicitly authorized cleanup, read
 `.agents/skills/reposteward-branch-cleanup/SKILL.md`.
+
+## Fork 分支约定
+
+- `main` 只快进同步原仓库 `upstream/main`，不承载个人修改。
+- `custom` 是个人文档与功能的长期集成基线。日常代码改动仍遵守上面的 Issue、独立分支和聚焦 PR 要求，以 `custom` 为基线开发。
+- 上游更新先进入 `main`，再将 `main` merge 到 `custom`；保留并解决两边的改动，不强制覆盖 `custom`。
+- 向原仓库贡献功能时，从最新 `upstream/main` 创建 `contribute/<功能>`，只 cherry-pick 该功能相关提交，核对差异与验证结果后再提交上游 PR。
+
+## Agent skills
+
+### Issue tracker
+
+工程技能使用 `ZJPex/RepoSteward` 的 GitHub Issues；所有操作显式指定目标仓库。详见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+分诊状态使用五个默认标签名称。详见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+使用单一上下文布局；按需读取根目录 `CONTEXT.md` 与 `docs/adr/`。详见 `docs/agents/domain.md`。
