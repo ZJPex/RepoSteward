@@ -52,16 +52,6 @@ def source_input(kind: str, value: str, host: str) -> dict:
     return {"kind": kind, "value": "https://" + remote["identity"]}
 
 
-def local_snapshot(path: str) -> dict:
-    meta = workspace_metadata(Path(path))
-    # Never store the unnormalized remote, which may contain user credentials.
-    return {
-        **meta,
-        "state": workspace_state(Path(meta["root"])),
-        "content_digest": workspace_snapshot(Path(meta["root"]))["digest"],
-    }
-
-
 def remote_facts(client, host: str, repository: str, guard) -> dict:
     path = "/repos/" + repository
     for hop in range(3):
@@ -109,6 +99,28 @@ class ProjectImports:
         self.account = operations.account
         api_host = urlsplit(operations.config.github.api_url).hostname
         self.host = "github.com" if api_host == "api.github.com" else api_host
+
+    def local_snapshot(self, path: str | Path, remote: dict | None = None) -> dict:
+        """先核对来源身份，再使用当前用户配置中的仓库级源码例外。"""
+        self.operations.workbench.check_configuration()
+        meta = workspace_metadata(Path(path))
+        if meta["host"] != self.host:
+            raise ProjectError("local origin host differs from the current account")
+        if remote is not None and (
+            remote["host"] != self.host or meta["identity"] not in remote["aliases"]
+        ):
+            raise ProjectError("local origin does not match the identified repository")
+        trusted_paths = self.operations.config.safety.tracked_sensitive_paths_for(
+            meta["repository"]
+        )
+        root = Path(meta["root"])
+        return {
+            **meta,
+            "state": workspace_state(root),
+            "content_digest": workspace_snapshot(
+                root, trusted_sensitive_paths=trusted_paths
+            )["digest"],
+        }
 
     def draft(self, import_id: str) -> dict:
         if not hex_id(import_id):
@@ -269,11 +281,7 @@ class ProjectImports:
                 target = (inspected.get("workspace") or {}).get("root", "")
             if not Path(target).is_absolute():
                 raise ProjectError("link requires an absolute workspace path")
-            local = local_snapshot(target)
-            if local["identity"] not in inspected["remote"]["aliases"]:
-                raise ProjectError(
-                    "local origin does not match the identified repository"
-                )
+            local = self.local_snapshot(target, inspected["remote"])
             target = local["root"]
         elif method == "clone":
             path = Path(target)
@@ -408,7 +416,7 @@ class ProjectImports:
                 return {"status": "completed", "import_id": draft["id"], **previous}
             source = draft["source"]
             local = (
-                local_snapshot(source["value"])
+                self.local_snapshot(source["value"])
                 if source["kind"] == "local_path"
                 else None
             )
@@ -416,7 +424,7 @@ class ProjectImports:
             if remote["host"] != self.host:
                 raise ProjectError("local origin host differs from the current account")
             facts = remote_facts(client, self.host, remote["repository"], guard)
-            if local and local_snapshot(local["root"]) != local:
+            if local and self.local_snapshot(local["root"], facts) != local:
                 raise ProjectError("workspace changed during inspection")
             result = {"remote": facts, "workspace": local, "observed_at": utc_now()}
             self.record(store, plan_id, "inspected", result, guard)
@@ -462,7 +470,7 @@ class ProjectImports:
             target = self.clone(store, plan_id, payload, guard)
         elif (
             payload["method"] == "link"
-            and local_snapshot(target) != payload["workspace"]
+            and self.local_snapshot(target, payload["remote"]) != payload["workspace"]
         ):
             raise ProjectError("workspace changed; create a new plan")
         expected_metadata = None
@@ -517,7 +525,8 @@ class ProjectImports:
                 or local_git(target, "rev-parse", "HEAD") != expected["head"]
                 or workspace_metadata(target)["identity"]
                 != payload["remote"]["identity"]
-                or workspace_snapshot(target)["digest"] != expected["snapshot_digest"]
+                or self.local_snapshot(target, payload["remote"])["content_digest"]
+                != expected["snapshot_digest"]
             ):
                 raise ProjectError("clone destination changed; inspect retained files")
             self.record(store, plan_id, "published", expected, guard)
@@ -554,13 +563,16 @@ class ProjectImports:
                 "directory": directory_identity(checkout),
                 "head": local_git(checkout, "rev-parse", "HEAD"),
                 "staging_name": checkout.name,
-                "snapshot_digest": workspace_snapshot(checkout)["digest"],
+                "snapshot_digest": self.local_snapshot(checkout, payload["remote"])[
+                    "content_digest"
+                ],
             }
             self.record(store, plan_id, "clone_prepared", prepared, guard)
         checkout = staging / prepared["staging_name"]
         if (
             directory_identity(checkout) != prepared["directory"]
-            or workspace_snapshot(checkout)["digest"] != prepared["snapshot_digest"]
+            or self.local_snapshot(checkout, payload["remote"])["content_digest"]
+            != prepared["snapshot_digest"]
             or workspace_metadata(checkout)["identity"] != payload["remote"]["identity"]
         ):
             raise ProjectError("clone staging changed before publication")
