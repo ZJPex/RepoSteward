@@ -102,6 +102,7 @@ def trust_locked(method):
     def locked(self, *args, **kwargs):
         with self.operations.workbench.trust_lock:
             return method(self, *args, **kwargs)
+
     return locked
 
 
@@ -139,10 +140,14 @@ class ProjectImports:
         }
 
     def trust_revision(self, repository: str) -> str:
-        return digest(self.operations.config.safety.tracked_sensitive_paths_for(repository))
+        return digest(
+            self.operations.config.safety.tracked_sensitive_paths_for(repository)
+        )
 
     def verify_trust(self, plan: dict):
-        if plan.get("trust_revision", digest(())) != self.trust_revision(plan.get("trust_repository", plan["remote"]["repository"])):
+        if plan.get("trust_revision", digest(())) != self.trust_revision(
+            plan.get("trust_repository", plan["remote"]["repository"])
+        ):
             raise ProjectError("源码信任已变化，请重新检查并生成计划。")
 
     def draft(self, import_id: str) -> dict:
@@ -333,8 +338,12 @@ class ProjectImports:
             "parent": parent,
             "registry_revision": self.registry.revision(),
             "account_digest": self.account,
-            "trust_repository": local["repository"] if local else inspected["remote"]["repository"],
-            "trust_revision": self.trust_revision(local["repository"] if local else inspected["remote"]["repository"]),
+            "trust_repository": local["repository"]
+            if local
+            else inspected["remote"]["repository"],
+            "trust_revision": self.trust_revision(
+                local["repository"] if local else inspected["remote"]["repository"]
+            ),
         }
         plan_id = uuid.uuid5(uuid.NAMESPACE_URL, digest(plan)).hex
         store = self.operations.store(write=True)

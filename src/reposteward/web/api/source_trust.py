@@ -33,30 +33,56 @@ def routes(service, *, manage_local):
         try:
             return envelope(getattr(service.source_trust, method)(**kwargs))
         except (ValueError, RuntimeError, OSError) as exc:
-            message = str(exc) if isinstance(exc, ProjectError) else "候选或配置不可用；请核对配置并重新检查，保存结果可查询或重试确认。"
+            message = (
+                str(exc)
+                if isinstance(exc, ProjectError)
+                else "候选或配置不可用；请核对配置并重新检查，保存结果可查询或重试确认。"
+            )
             raise OperationError("source_trust", message, 409) from exc
 
-    @router.post("/commands/source-trust/check", response_model=Response[Record], operation_id="checkSourceTrust")
+    @router.post(
+        "/commands/source-trust/check",
+        response_model=Response[Record],
+        operation_id="checkSourceTrust",
+    )
     def check(request: CandidateRequest, key: Key):
         return invoke("check", **request.model_dump(), key=key)
 
-    @router.post("/commands/source-trust/save", response_model=Response[Record], operation_id="saveSourceTrust")
+    @router.post(
+        "/commands/source-trust/save",
+        response_model=Response[Record],
+        operation_id="saveSourceTrust",
+    )
     def save(request: TrustSaveRequest, key: Key):
         return invoke("save", **request.model_dump(), key=key)
 
-    @router.get("/source-trust-result", response_model=Response[Record], operation_id="sourceTrustResult")
+    @router.get(
+        "/source-trust-result",
+        response_model=Response[Record],
+        operation_id="sourceTrustResult",
+    )
     def status(request_id: ProjectID):
         return invoke("status", request_id=request_id)
 
-    @router.get("/source-trust", response_model=Response[Record], operation_id="sourceTrustList")
+    @router.get(
+        "/source-trust", response_model=Response[Record], operation_id="sourceTrustList"
+    )
     def listing(import_id: ProjectID, target: str = Query(default="", max_length=4096)):
         return invoke("listing", command=False, import_id=import_id, target=target)
 
-    @router.post("/commands/source-trust/revoke-check", response_model=Response[Record], operation_id="checkSourceTrustRevoke")
+    @router.post(
+        "/commands/source-trust/revoke-check",
+        response_model=Response[Record],
+        operation_id="checkSourceTrustRevoke",
+    )
     def check_remove(request: CandidateRequest, key: Key):
         return invoke("check_remove", **request.model_dump(), key=key)
 
-    @router.post("/commands/source-trust/revoke", response_model=Response[Record], operation_id="revokeSourceTrust")
+    @router.post(
+        "/commands/source-trust/revoke",
+        response_model=Response[Record],
+        operation_id="revokeSourceTrust",
+    )
     def remove(request: TrustSaveRequest, key: Key):
         return invoke("save", **request.model_dump(), key=key, mode="remove")
 

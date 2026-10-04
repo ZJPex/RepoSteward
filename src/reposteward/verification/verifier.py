@@ -22,6 +22,7 @@ from reposteward.core.config import (
     RepositoryPolicy,
 )
 from reposteward.core.models import AgentResult, CommandResult, VerificationResult
+from reposteward.core.source_files import source_digest
 
 DANGEROUS_COMMAND = re.compile(
     r"(?:\brm\s+-|\bcurl\b|\bwget\b|\bssh\b|\bgit\s+push\b|\bdocker\b|"
@@ -239,9 +240,11 @@ class DockerVerifier:
     ) -> bool:
         relative_parts = tuple(part.casefold() for part in relative.parts)
         return any(
-            (relative.as_posix() == configured.removeprefix(":file:")
-             if configured.startswith(":file:") else
-             relative_parts[: len(prefix_parts)] == prefix_parts)
+            (
+                relative.as_posix() == configured.removeprefix(":file:")
+                if configured.startswith(":file:")
+                else relative_parts[: len(prefix_parts)] == prefix_parts
+            )
             for configured in trusted_sensitive_paths
             if (
                 prefix_parts := tuple(
@@ -368,6 +371,11 @@ class DockerVerifier:
                     cls._validate_allowlisted_sensitive_source(
                         worktree / relative, relative
                     )
+                    if ":file:" + relative.as_posix() in trusted_sensitive_paths:
+                        try:
+                            source_digest(worktree, relative.as_posix())
+                        except ValueError as exc:
+                            raise VerificationError(str(exc)) from exc
                 elif is_tracked:
                     raise VerificationError(
                         f"tracked sensitive path cannot enter verification: {relative}"
