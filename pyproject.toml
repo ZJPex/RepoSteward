@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "tiammomo", email = "tiammomo@users.noreply.github.com" }]
 dependencies = [
+  "tomlkit>=0.13,<1",
   "jsonschema>=4.23,<5",
   "fastapi>=0.141.1,<0.142",
   "pydantic>=2.10,<3",

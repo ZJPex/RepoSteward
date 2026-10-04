@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 from reposteward.github.client import GitHubClient, GitHubReadError
 from reposteward.github.sync import GitHubSync, account_key, observations
+from reposteward.projects.source_trust import SourceTrust
 from reposteward.projects.imports import ProjectImports, import_problem
 from reposteward.projects.registry import ProjectError
 from reposteward.projects.scans import WorkspaceScans
@@ -62,6 +63,7 @@ class LocalOperations:
         self.stopping, self.wake = Event(), Event()
         self.thread: Thread | None = None
         self.imports = ProjectImports(self)
+        self.source_trust = SourceTrust(self)
         self.scans = WorkspaceScans(self)
 
     def store(self, *, write: bool = False) -> Store | None:

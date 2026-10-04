@@ -27,6 +27,7 @@ from reposteward.tasks.external import TaskConflict
 from reposteward.tasks.local_operations import LocalOperations, OperationError
 from reposteward.web.api import schemas as dto
 from reposteward.web.api.assets import load_assets
+from reposteward.web.api.source_trust import routes as source_trust_routes
 from reposteward.web.api.imports import routes as import_routes
 from reposteward.web.api.operations import routes
 from reposteward.web.api.scans import routes as scan_routes
@@ -34,6 +35,8 @@ from reposteward.web.api.tasks import routes as task_routes
 from reposteward.web.workbench import Workbench
 
 COMMAND_PATHS = {
+    "/api/v1/commands/source-trust/check",
+    "/api/v1/commands/source-trust/save",
     "/api/v1/commands/tasks/handoff",
     "/api/v1/commands/tasks/acknowledge",
     "/api/v1/commands/tasks/verify",
@@ -448,6 +451,7 @@ def create_app(
         return app.openapi()
 
     app.include_router(routes(service, manage_local=manage_local))
+    app.include_router(source_trust_routes(service, manage_local=manage_local))
     app.include_router(import_routes(service, manage_local=manage_local))
     app.include_router(scan_routes(service, manage_local=manage_local))
     app.include_router(task_routes(service, manage_local=manage_local))
@@ -511,3 +515,4 @@ if __name__ == "__main__":
     print(
         json.dumps(create_app().openapi(), ensure_ascii=False, indent=2, sort_keys=True)
     )
+

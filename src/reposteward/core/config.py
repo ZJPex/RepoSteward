@@ -116,13 +116,13 @@ class SafetyConfig:
     )
     tracked_sensitive_paths: tuple[tuple[str, tuple[str, ...]], ...] = ()
     workflow_grants: tuple[WorkflowReviewGrant, ...] = ()
+    trusted_source_files: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     def tracked_sensitive_paths_for(self, repository: str) -> tuple[str, ...]:
         normalized = repository.casefold()
-        for configured_repository, paths in self.tracked_sensitive_paths:
-            if configured_repository == normalized:
-                return paths
-        return ()
+        prefixes = dict(self.tracked_sensitive_paths).get(normalized, ())
+        files = dict(self.trusted_source_files).get(normalized, ())
+        return prefixes + tuple(":file:" + path for path in files)
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,6 +372,7 @@ def _merge_layers(user: dict[str, Any], project: dict[str, Any]) -> dict[str, An
         if isinstance(safety, dict):
             safety = dict(safety)
             safety.pop("tracked_sensitive_paths", None)
+            safety.pop("trusted_source_files", None)
             safety.pop("workflow_grants", None)
             result["safety"] = safety
         repositories = result.get("repositories")
@@ -478,6 +479,7 @@ def _merge_layers(user: dict[str, Any], project: dict[str, Any]) -> dict[str, An
         merged_safety["forbidden_paths"] = list(dict.fromkeys(forbidden))
         trusted_paths = user_safety.get("tracked_sensitive_paths", {})
         merged_safety["tracked_sensitive_paths"] = trusted_paths
+        merged_safety["trusted_source_files"] = user_safety.get("trusted_source_files", {})
         merged_safety["workflow_grants"] = user_safety.get("workflow_grants", [])
         result["safety"] = merged_safety
 
@@ -921,6 +923,7 @@ def load_config(
         workflow_grants=_workflow_grants(
             _section(user_raw, "safety").get("workflow_grants")
         ),
+        trusted_source_files=_tracked_sensitive_paths(safety_raw.get("trusted_source_files")),
         tracked_sensitive_paths=_tracked_sensitive_paths(
             safety_raw.get("tracked_sensitive_paths")
         ),
