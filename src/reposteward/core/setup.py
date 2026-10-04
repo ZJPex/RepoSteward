@@ -88,6 +88,10 @@ draft_pull_requests = true
 
 # Only configure this table in the trusted per-user file. Entries must name a
 # repository and a nested sensitive directory; project config cannot add them.
+# 精确源码例外只匹配具体文件，可由导入页面明确确认后保存。
+# [safety.trusted_source_files]
+# "owner/repository" = ["src/credentials/provider.py"]
+#
 # [safety.tracked_sensitive_paths]
 # "owner/repository" = ["src/secrets/"]
 

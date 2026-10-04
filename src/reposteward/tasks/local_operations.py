@@ -19,6 +19,7 @@ from reposteward.github.sync import GitHubSync, account_key, observations
 from reposteward.projects.imports import ProjectImports, import_problem
 from reposteward.projects.registry import ProjectError
 from reposteward.projects.scans import WorkspaceScans
+from reposteward.projects.source_trust import SourceTrust
 from reposteward.storage.local_queue import (
     ASSISTANCE_ACTIONS,
     digest,
@@ -54,7 +55,7 @@ def revision(task: dict) -> str:
 
 class LocalOperations:
     def __init__(self, workbench: Workbench, *, client_factory=GitHubClient):
-        self.workbench, self.config = workbench, workbench.config
+        self.workbench = workbench
         self.account = account_key(self.config)
         self.path = self.config.state_dir / "reposteward.sqlite3"
         self.client_factory = client_factory
@@ -62,7 +63,12 @@ class LocalOperations:
         self.stopping, self.wake = Event(), Event()
         self.thread: Thread | None = None
         self.imports = ProjectImports(self)
+        self.source_trust = SourceTrust(self)
         self.scans = WorkspaceScans(self)
+
+    @property
+    def config(self):
+        return self.workbench.config
 
     def store(self, *, write: bool = False) -> Store | None:
         self.workbench.check_configuration()
@@ -664,6 +670,7 @@ class LocalOperations:
                                 "status": "failed",
                                 "error_code": code,
                                 "message": message,
+                                "diagnostics": getattr(exc, "diagnostics", None),
                             }
                             db.execute(
                                 "INSERT OR IGNORE INTO local_operation_results VALUES (?,?,?,?,?,?)",

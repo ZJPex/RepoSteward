@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from reposteward.core.source_rules import exact_rule
+
 CONFIG_VERSION = 1
 PROJECT_CONFIG_NAMES = (".reposteward.toml", "reposteward.toml", "starfix.toml")
 DIAGNOSTIC_SETTINGS = (
@@ -116,13 +118,14 @@ class SafetyConfig:
     )
     tracked_sensitive_paths: tuple[tuple[str, tuple[str, ...]], ...] = ()
     workflow_grants: tuple[WorkflowReviewGrant, ...] = ()
+    trusted_source_files: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    source_trust_revisions: tuple[tuple[str, str], ...] = ()
 
     def tracked_sensitive_paths_for(self, repository: str) -> tuple[str, ...]:
         normalized = repository.casefold()
-        for configured_repository, paths in self.tracked_sensitive_paths:
-            if configured_repository == normalized:
-                return paths
-        return ()
+        prefixes = dict(self.tracked_sensitive_paths).get(normalized, ())
+        files = dict(self.trusted_source_files).get(normalized, ())
+        return prefixes + tuple(exact_rule(path) for path in files)
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,6 +375,8 @@ def _merge_layers(user: dict[str, Any], project: dict[str, Any]) -> dict[str, An
         if isinstance(safety, dict):
             safety = dict(safety)
             safety.pop("tracked_sensitive_paths", None)
+            safety.pop("trusted_source_files", None)
+            safety.pop("source_trust_revisions", None)
             safety.pop("workflow_grants", None)
             result["safety"] = safety
         repositories = result.get("repositories")
@@ -478,6 +483,12 @@ def _merge_layers(user: dict[str, Any], project: dict[str, Any]) -> dict[str, An
         merged_safety["forbidden_paths"] = list(dict.fromkeys(forbidden))
         trusted_paths = user_safety.get("tracked_sensitive_paths", {})
         merged_safety["tracked_sensitive_paths"] = trusted_paths
+        merged_safety["trusted_source_files"] = user_safety.get(
+            "trusted_source_files", {}
+        )
+        merged_safety["source_trust_revisions"] = user_safety.get(
+            "source_trust_revisions", {}
+        )
         merged_safety["workflow_grants"] = user_safety.get("workflow_grants", [])
         result["safety"] = merged_safety
 
@@ -656,6 +667,26 @@ def fresh_workflow_grants(config: AppConfig) -> tuple[WorkflowReviewGrant, ...]:
     ):
         raise ConfigError("workflow review account changed; reload configuration")
     return _workflow_grants(_section(raw, "safety").get("workflow_grants"))
+
+
+def source_trust_revisions(value: object) -> tuple[tuple[str, str], ...]:
+    """授权修订仅来自用户配置，与路径集合一起持久化。"""
+    if value is None:
+        return ()
+    if not isinstance(value, dict):
+        raise ConfigError("source_trust_revisions must be a table")
+    result = {}
+    for repository, revision in value.items():
+        if (
+            not isinstance(repository, str)
+            or REPOSITORY_NAME.fullmatch(repository) is None
+            or not isinstance(revision, str)
+            or re.fullmatch(r"[0-9a-f]{32}", revision) is None
+            or repository.casefold() in result
+        ):
+            raise ConfigError("invalid source trust revision")
+        result[repository.casefold()] = revision
+    return tuple(sorted(result.items()))
 
 
 def _tracked_sensitive_paths(
@@ -920,6 +951,12 @@ def load_config(
         ),
         workflow_grants=_workflow_grants(
             _section(user_raw, "safety").get("workflow_grants")
+        ),
+        source_trust_revisions=source_trust_revisions(
+            safety_raw.get("source_trust_revisions")
+        ),
+        trusted_source_files=_tracked_sensitive_paths(
+            safety_raw.get("trusted_source_files")
         ),
         tracked_sensitive_paths=_tracked_sensitive_paths(
             safety_raw.get("tracked_sensitive_paths")

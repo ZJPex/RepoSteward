@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from reposteward.core.config import EnvTemplateBooleans
+from reposteward.core.source_files import source_digest
+from reposteward.core.source_rules import exact_covered
 from reposteward.projects.registry import (
     ProjectError,
     canonical_digest,
@@ -66,6 +68,11 @@ def _entries(
                 )
             ):
                 DockerVerifier._validate_allowlisted_sensitive_source(source, relative)
+                if exact_covered(name, trusted_sensitive_paths):
+                    try:
+                        source_digest(root, name)
+                    except ValueError as exc:
+                        raise ProjectError(str(exc)) from exc
             elif is_tracked:
                 raise ProjectError(
                     "tracked sensitive path cannot enter a task snapshot"

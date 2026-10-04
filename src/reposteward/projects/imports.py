@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from reposteward.github.client import GitHubReadError
 from reposteward.projects.clone import clone_ssh, directory_identity, publish_directory
 from reposteward.projects.identity import PURPOSES
+from reposteward.projects.import_diagnostics import ImportDiagnosticsError, diagnose
 from reposteward.projects.registry import (
     ProjectError,
     local_git,
@@ -20,6 +21,7 @@ from reposteward.projects.registry import (
 from reposteward.storage.local_queue import digest, encoded, enqueue, hex_id
 from reposteward.storage.snapshots import workspace_snapshot
 from reposteward.storage.store import utc_now
+from reposteward.verification.verifier import VerificationError
 
 
 def source_input(kind: str, value: str, host: str) -> dict:
@@ -50,16 +52,6 @@ def source_input(kind: str, value: str, host: str) -> dict:
     if remote["host"] != host:
         raise ProjectError("project host differs from the configured GitHub account")
     return {"kind": kind, "value": "https://" + remote["identity"]}
-
-
-def local_snapshot(path: str) -> dict:
-    meta = workspace_metadata(Path(path))
-    # Never store the unnormalized remote, which may contain user credentials.
-    return {
-        **meta,
-        "state": workspace_state(Path(meta["root"])),
-        "content_digest": workspace_snapshot(Path(meta["root"]))["digest"],
-    }
 
 
 def remote_facts(client, host: str, repository: str, guard) -> dict:
@@ -102,6 +94,18 @@ def remote_facts(client, host: str, repository: str, guard) -> dict:
     }
 
 
+def trust_locked(method):
+    """检查、计划和最终登记共享配置锁，拒绝跨修订结果。"""
+    from functools import wraps
+
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self.operations.workbench.trust_lock:
+            return method(self, *args, **kwargs)
+
+    return locked
+
+
 class ProjectImports:
     def __init__(self, operations):
         self.operations = operations
@@ -109,6 +113,48 @@ class ProjectImports:
         self.account = operations.account
         api_host = urlsplit(operations.config.github.api_url).hostname
         self.host = "github.com" if api_host == "api.github.com" else api_host
+
+    @trust_locked
+    def local_snapshot(self, path: str | Path, remote: dict | None = None) -> dict:
+        """先核对来源身份，再使用当前用户配置中的仓库级源码例外。"""
+        self.operations.workbench.check_configuration()
+        meta = workspace_metadata(Path(path))
+        if meta["host"] != self.host:
+            raise ProjectError("local origin host differs from the current account")
+        if remote is not None and (
+            remote["host"] != self.host or meta["identity"] not in remote["aliases"]
+        ):
+            raise ProjectError("local origin does not match the identified repository")
+        trusted_paths = self.operations.config.safety.tracked_sensitive_paths_for(
+            meta["repository"]
+        )
+        root = Path(meta["root"])
+        try:
+            snapshot = workspace_snapshot(root, trusted_sensitive_paths=trusted_paths)
+        except (ProjectError, VerificationError, OSError) as exc:
+            raise ImportDiagnosticsError(diagnose(root, trusted_paths)) from exc
+        return {
+            **meta,
+            "state": workspace_state(root),
+            "content_digest": snapshot["digest"],
+        }
+
+    def trust_revision(self, repository: str) -> str:
+        safety = self.operations.config.safety
+        return digest(
+            {
+                "rules": safety.tracked_sensitive_paths_for(repository),
+                "revision": dict(safety.source_trust_revisions).get(
+                    repository.casefold(), ""
+                ),
+            }
+        )
+
+    def verify_trust(self, plan: dict):
+        if plan.get("trust_revision", digest(())) != self.trust_revision(
+            plan.get("trust_repository", plan["remote"]["repository"])
+        ):
+            raise ProjectError("源码信任已变化，请重新检查并生成计划。")
 
     def draft(self, import_id: str) -> dict:
         if not hex_id(import_id):
@@ -184,6 +230,18 @@ class ProjectImports:
                 (plan_id, stage, encoded(body), digest(body), utc_now()),
             )
 
+    def source_identity(self, import_id: str) -> dict:
+        self.draft(import_id)
+        store = self.operations.store()
+        with store._connection() as db:
+            row = db.execute(
+                "SELECT p.id FROM local_operation_plans p JOIN project_import_steps s ON s.plan_id=p.id AND s.stage='source_identity' WHERE p.scope_key=? AND p.account_digest=? ORDER BY p.created_at DESC LIMIT 1",
+                (import_id, self.account),
+            ).fetchone()
+        if row is None:
+            raise ProjectError("缺少已识别的本地仓库身份，请重新识别项目。")
+        return self.step(store, row["id"], "source_identity")
+
     def show(self, import_id: str) -> dict:
         draft = self.draft(import_id)
         store = self.operations.store()
@@ -217,6 +275,7 @@ class ProjectImports:
             "public_write": False,
         }
 
+    @trust_locked
     def plan(
         self,
         import_id: str,
@@ -269,11 +328,7 @@ class ProjectImports:
                 target = (inspected.get("workspace") or {}).get("root", "")
             if not Path(target).is_absolute():
                 raise ProjectError("link requires an absolute workspace path")
-            local = local_snapshot(target)
-            if local["identity"] not in inspected["remote"]["aliases"]:
-                raise ProjectError(
-                    "local origin does not match the identified repository"
-                )
+            local = self.local_snapshot(target, inspected["remote"])
             target = local["root"]
         elif method == "clone":
             path = Path(target)
@@ -301,6 +356,12 @@ class ProjectImports:
             "parent": parent,
             "registry_revision": self.registry.revision(),
             "account_digest": self.account,
+            "trust_repository": local["repository"]
+            if local
+            else inspected["remote"]["repository"],
+            "trust_revision": self.trust_revision(
+                local["repository"] if local else inspected["remote"]["repository"]
+            ),
         }
         plan_id = uuid.uuid5(uuid.NAMESPACE_URL, digest(plan)).hex
         store = self.operations.store(write=True)
@@ -342,6 +403,7 @@ class ProjectImports:
             "public_write": False,
         }
 
+    @trust_locked
     def apply(
         self, import_id: str, preview_id: str, expected_digest: str, key: str
     ) -> dict:
@@ -357,6 +419,7 @@ class ProjectImports:
         plan = json.loads(row["body"])
         if digest(plan) != row["body_digest"] or row["body_digest"] != expected_digest:
             raise ProjectError("import plan changed")
+        self.verify_trust(plan)
         request = digest(
             {
                 "import_id": import_id,
@@ -388,6 +451,7 @@ class ProjectImports:
         self.operations.wake.set()
         return self.operations.operation(task["id"])
 
+    @trust_locked
     def execute(self, store, task: dict, plan: dict, client, guard) -> dict:
         draft = self.draft(task["scope_key"])
         guard()
@@ -407,16 +471,34 @@ class ProjectImports:
             if previous:
                 return {"status": "completed", "import_id": draft["id"], **previous}
             source = draft["source"]
-            local = (
-                local_snapshot(source["value"])
+            meta = (
+                workspace_metadata(Path(source["value"]))
                 if source["kind"] == "local_path"
                 else None
             )
-            remote = local or normalize_remote(source["value"])
+            remote = meta or normalize_remote(source["value"])
             if remote["host"] != self.host:
                 raise ProjectError("local origin host differs from the current account")
+            local, blocked = None, None
+            if meta:
+                try:
+                    local = self.local_snapshot(source["value"])
+                except ImportDiagnosticsError as exc:
+                    blocked = exc
             facts = remote_facts(client, self.host, remote["repository"], guard)
-            if local and local_snapshot(local["root"]) != local:
+            if meta:
+                if workspace_metadata(Path(source["value"])) != meta:
+                    raise ProjectError("workspace identity changed during inspection")
+                self.record(
+                    store,
+                    plan_id,
+                    "source_identity",
+                    {"workspace": meta, "remote": facts},
+                    guard,
+                )
+            if blocked is not None:
+                raise blocked
+            if local and self.local_snapshot(local["root"], facts) != local:
                 raise ProjectError("workspace changed during inspection")
             result = {"remote": facts, "workspace": local, "observed_at": utc_now()}
             self.record(store, plan_id, "inspected", result, guard)
@@ -426,6 +508,7 @@ class ProjectImports:
             or payload["import_id"] != draft["id"]
         ):
             raise ProjectError("import plan scope changed")
+        self.verify_trust(payload)
         completed = self.step(store, plan_id, "completed")
         if completed:
             return {"status": "completed", **completed}
@@ -462,7 +545,7 @@ class ProjectImports:
             target = self.clone(store, plan_id, payload, guard)
         elif (
             payload["method"] == "link"
-            and local_snapshot(target) != payload["workspace"]
+            and self.local_snapshot(target, payload["remote"]) != payload["workspace"]
         ):
             raise ProjectError("workspace changed; create a new plan")
         expected_metadata = None
@@ -517,7 +600,8 @@ class ProjectImports:
                 or local_git(target, "rev-parse", "HEAD") != expected["head"]
                 or workspace_metadata(target)["identity"]
                 != payload["remote"]["identity"]
-                or workspace_snapshot(target)["digest"] != expected["snapshot_digest"]
+                or self.local_snapshot(target, payload["remote"])["content_digest"]
+                != expected["snapshot_digest"]
             ):
                 raise ProjectError("clone destination changed; inspect retained files")
             self.record(store, plan_id, "published", expected, guard)
@@ -554,13 +638,16 @@ class ProjectImports:
                 "directory": directory_identity(checkout),
                 "head": local_git(checkout, "rev-parse", "HEAD"),
                 "staging_name": checkout.name,
-                "snapshot_digest": workspace_snapshot(checkout)["digest"],
+                "snapshot_digest": self.local_snapshot(checkout, payload["remote"])[
+                    "content_digest"
+                ],
             }
             self.record(store, plan_id, "clone_prepared", prepared, guard)
         checkout = staging / prepared["staging_name"]
         if (
             directory_identity(checkout) != prepared["directory"]
-            or workspace_snapshot(checkout)["digest"] != prepared["snapshot_digest"]
+            or self.local_snapshot(checkout, payload["remote"])["content_digest"]
+            != prepared["snapshot_digest"]
             or workspace_metadata(checkout)["identity"] != payload["remote"]["identity"]
         ):
             raise ProjectError("clone staging changed before publication")
@@ -571,6 +658,8 @@ class ProjectImports:
 
 
 def import_problem(exc: Exception) -> tuple[str, str]:
+    if isinstance(exc, ImportDiagnosticsError):
+        return "import_rejected", "导入检查未通过，请查看拒绝项及检查完整性。"
     message = str(exc).casefold()
     for words, code, text in (
         (

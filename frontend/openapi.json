@@ -57,6 +57,37 @@
         "title": "Attention",
         "type": "object"
       },
+      "CandidateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "import_id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Import Id",
+            "type": "string"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Paths",
+            "type": "array"
+          },
+          "target": {
+            "default": "",
+            "maxLength": 4096,
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "import_id",
+          "paths"
+        ],
+        "title": "CandidateRequest",
+        "type": "object"
+      },
       "Code": {
         "additionalProperties": {
           "$ref": "#/components/schemas/JsonValue"
@@ -1429,6 +1460,22 @@
         "title": "Response[Projects]",
         "type": "object"
       },
+      "Response_Record_": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Record"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "title": "Response[Record]",
+        "type": "object"
+      },
       "Response_Review_": {
         "properties": {
           "data": {
@@ -2167,6 +2214,43 @@
         "title": "Tasks",
         "type": "object"
       },
+      "TrustSaveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "check_id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Check Id",
+            "type": "string"
+          },
+          "expected_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Expected Digest",
+            "type": "string"
+          },
+          "import_id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Import Id",
+            "type": "string"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Paths",
+            "type": "array"
+          }
+        },
+        "required": [
+          "import_id",
+          "check_id",
+          "expected_digest",
+          "paths"
+        ],
+        "title": "TrustSaveRequest",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -2723,6 +2807,206 @@
           }
         },
         "summary": "Plan"
+      }
+    },
+    "/api/v1/commands/source-trust/check": {
+      "post": {
+        "operationId": "checkSourceTrust",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CandidateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response_Record_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Check"
+      }
+    },
+    "/api/v1/commands/source-trust/revoke": {
+      "post": {
+        "operationId": "revokeSourceTrust",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrustSaveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response_Record_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove"
+      }
+    },
+    "/api/v1/commands/source-trust/revoke-check": {
+      "post": {
+        "operationId": "checkSourceTrustRevoke",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CandidateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response_Record_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Check Remove"
+      }
+    },
+    "/api/v1/commands/source-trust/save": {
+      "post": {
+        "operationId": "saveSourceTrust",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrustSaveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response_Record_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save"
       }
     },
     "/api/v1/commands/tasks/acknowledge": {
@@ -3425,6 +3709,97 @@
           }
         },
         "summary": "Settings"
+      }
+    },
+    "/api/v1/source-trust": {
+      "get": {
+        "operationId": "sourceTrustList",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "import_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{32}$",
+              "title": "Import Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 4096,
+              "title": "Target",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response_Record_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Listing"
+      }
+    },
+    "/api/v1/source-trust-result": {
+      "get": {
+        "operationId": "sourceTrustResult",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{32}$",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Response_Record_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Status"
       }
     },
     "/api/v1/task": {
