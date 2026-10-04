@@ -92,6 +92,17 @@ def remote_facts(client, host: str, repository: str, guard) -> dict:
     }
 
 
+def trust_locked(method):
+    """检查、计划和最终登记共享配置锁，拒绝跨修订结果。"""
+    from functools import wraps
+
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self.operations.workbench.trust_lock:
+            return method(self, *args, **kwargs)
+    return locked
+
+
 class ProjectImports:
     def __init__(self, operations):
         self.operations = operations
@@ -100,6 +111,7 @@ class ProjectImports:
         api_host = urlsplit(operations.config.github.api_url).hostname
         self.host = "github.com" if api_host == "api.github.com" else api_host
 
+    @trust_locked
     def local_snapshot(self, path: str | Path, remote: dict | None = None) -> dict:
         """先核对来源身份，再使用当前用户配置中的仓库级源码例外。"""
         self.operations.workbench.check_configuration()
@@ -121,6 +133,13 @@ class ProjectImports:
                 root, trusted_sensitive_paths=trusted_paths
             )["digest"],
         }
+
+    def trust_revision(self, repository: str) -> str:
+        return digest(self.operations.config.safety.tracked_sensitive_paths_for(repository))
+
+    def verify_trust(self, plan: dict):
+        if plan.get("trust_revision", digest(())) != self.trust_revision(plan.get("trust_repository", plan["remote"]["repository"])):
+            raise ProjectError("源码信任已变化，请重新检查并生成计划。")
 
     def draft(self, import_id: str) -> dict:
         if not hex_id(import_id):
@@ -229,6 +248,7 @@ class ProjectImports:
             "public_write": False,
         }
 
+    @trust_locked
     def plan(
         self,
         import_id: str,
@@ -309,6 +329,8 @@ class ProjectImports:
             "parent": parent,
             "registry_revision": self.registry.revision(),
             "account_digest": self.account,
+            "trust_repository": local["repository"] if local else inspected["remote"]["repository"],
+            "trust_revision": self.trust_revision(local["repository"] if local else inspected["remote"]["repository"]),
         }
         plan_id = uuid.uuid5(uuid.NAMESPACE_URL, digest(plan)).hex
         store = self.operations.store(write=True)
@@ -350,6 +372,7 @@ class ProjectImports:
             "public_write": False,
         }
 
+    @trust_locked
     def apply(
         self, import_id: str, preview_id: str, expected_digest: str, key: str
     ) -> dict:
@@ -365,6 +388,7 @@ class ProjectImports:
         plan = json.loads(row["body"])
         if digest(plan) != row["body_digest"] or row["body_digest"] != expected_digest:
             raise ProjectError("import plan changed")
+        self.verify_trust(plan)
         request = digest(
             {
                 "import_id": import_id,
@@ -396,6 +420,7 @@ class ProjectImports:
         self.operations.wake.set()
         return self.operations.operation(task["id"])
 
+    @trust_locked
     def execute(self, store, task: dict, plan: dict, client, guard) -> dict:
         draft = self.draft(task["scope_key"])
         guard()
@@ -434,6 +459,7 @@ class ProjectImports:
             or payload["import_id"] != draft["id"]
         ):
             raise ProjectError("import plan scope changed")
+        self.verify_trust(payload)
         completed = self.step(store, plan_id, "completed")
         if completed:
             return {"status": "completed", **completed}

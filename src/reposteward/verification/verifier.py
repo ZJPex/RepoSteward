@@ -239,7 +239,9 @@ class DockerVerifier:
     ) -> bool:
         relative_parts = tuple(part.casefold() for part in relative.parts)
         return any(
-            relative_parts[: len(prefix_parts)] == prefix_parts
+            (relative.as_posix() == configured.removeprefix(":file:")
+             if configured.startswith(":file:") else
+             relative_parts[: len(prefix_parts)] == prefix_parts)
             for configured in trusted_sensitive_paths
             if (
                 prefix_parts := tuple(

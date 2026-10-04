@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shlex
+from threading import RLock
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -31,6 +32,7 @@ class Workbench:
         api = urlsplit(config.github.api_url)
         if api.username or api.password or api.query or api.fragment:
             raise ValueError("correct the API URL using doctor --local first")
+        self.trust_lock = RLock()
         self.config = config
         self.registry = ProjectRegistry(config.state_dir / "projects.sqlite3")
         self.tasks_service = ExternalTasks(config)
