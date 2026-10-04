@@ -108,6 +108,42 @@ class SourceTrust:
                 storage.put(identity, request, result)
                 return result
 
+    def listing(self, import_id: str, target: str) -> dict:
+        with self.operations.workbench.trust_lock:
+            self.operations.workbench.check_configuration()
+            binding = self.identity(import_id, target)
+            repository = binding["workspace"]["repository"].casefold()
+            safety = self.operations.config.safety
+            exact = dict(safety.trusted_source_files).get(repository, ())
+            legacy = dict(safety.tracked_sensitive_paths).get(repository, ())
+            items = []
+            for path in exact:
+                coverage = [rule for rule in legacy if path == rule or path.startswith(rule + "/")]
+                items.append({"path": path, "covering_rules": coverage, "revocable": not coverage})
+            return {"repository": repository, "items": items, "legacy_rules": list(legacy)}
+
+    def check_remove(self, import_id: str, target: str, paths: list[str], key: str) -> dict:
+        """撤销依据为配置精确项，无需文件仍存在或仍符合授权条件。"""
+        with self.operations.workbench.trust_lock:
+            self.operations.workbench.check_configuration()
+            storage = self.storage()
+            request = digest({"import_id": import_id, "target": target, "paths": paths, "mode": "remove"})
+            identity = uuid.uuid5(uuid.NAMESPACE_URL, self.operations.account + ":trust-remove-check:" + key).hex
+            with storage.locked():
+                old = storage.get(identity)
+                if old:
+                    if old["request"] != request:
+                        raise ProjectError("idempotency_conflict")
+                    return old
+                binding = self.identity(import_id, target)
+                listed = {item["path"]: item for item in self.listing(import_id, target)["items"]}
+                if not paths or len(paths) != len(set(paths)) or any(not listed.get(path, {}).get("revocable") for path in paths):
+                    raise ProjectError("只能撤销当前仓库未被目录规则覆盖的精确文件例外。")
+                result = {"id": identity, "account_digest": self.operations.account, "request": request, "import_id": import_id, "target": target, "binding": binding, "mode": "remove", "items": [{"path": path, "valid": True, "evidence": "", "message": "等待明确确认撤销。"} for path in paths], "config_digest": sha(storage.read()), "public_write": False}
+                result["digest"] = digest(result)
+                storage.put(identity, request, result)
+                return result
+
     def check_other_layers(self):
         workbench = self.operations.workbench
         user_path = self.storage().path
@@ -153,7 +189,7 @@ class SourceTrust:
                         raise ProjectError("配置已变化，请核对保存状态。")
                 operations.workbench.check_configuration()
                 checked = storage.get(check_id)
-                if not checked or checked["import_id"] != import_id or checked["digest"] != expected_digest:
+                if not checked or checked["import_id"] != import_id or checked["digest"] != expected_digest or checked.get("mode", "add") != mode or checked.get("account_digest") != operations.account:
                     raise ProjectError("候选检查依据已失效。")
                 binding = self.identity(import_id, checked["target"])
                 if binding != checked["binding"]:
@@ -162,7 +198,11 @@ class SourceTrust:
                 root = Path(binding["workspace"]["root"])
                 for path in paths:
                     previous = by_path.get(path)
-                    if not previous or not previous["valid"] or candidate(root, path) != previous:
+                    if mode == "remove":
+                        listed = {item["path"]: item for item in self.listing(import_id, checked["target"])["items"]}
+                        if not previous or not listed.get(path, {}).get("revocable"):
+                            raise ProjectError("撤销依据已变化，或文件仍由目录规则覆盖。")
+                    elif not previous or not previous["valid"] or candidate(root, path) != previous:
                         raise ProjectError("选中文件已变化或不合法，整组未保存，请重新检查。")
                 before = storage.read()
                 if sha(before) != checked["config_digest"]:

@@ -21,6 +21,19 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("导入检查反馈", () => {
+  it("切换关联目录后丢弃旧候选证据和选择", async () => {
+    mocks.fixtures.import = { id: "id", source: { kind: "github_url", value: "https://github.com/owner/repo" }, inspection_id: "inspection", inspection: { remote: { repository: "owner/repo" } }, operations: [] };
+    mocks.command.mockResolvedValue({ id: "check", digest: "digest", items: [{ path: "src/credentials/main.py", valid: true, evidence: "e", message: "已核验" }] });
+    show("/imports/id");
+    fireEvent.change(screen.getByLabelText("已有 Git 目录"), { target: { value: "/tmp/one" } });
+    fireEvent.change(await screen.findByLabelText("具体源码相对路径"), { target: { value: "src/credentials/main.py" } });
+    fireEvent.click(screen.getByText("检查并添加到列表"));
+    fireEvent.click(await screen.findByLabelText("授权 src/credentials/main.py"));
+    fireEvent.change(screen.getByLabelText("已有 Git 目录"), { target: { value: "/tmp/two" } });
+    expect(screen.queryByLabelText("授权 src/credentials/main.py")).toBeNull();
+    expect(screen.getByText("将选中文件加入白名单").hasAttribute("disabled")).toBe(true);
+  });
+
   it("显示真实等待时间并在完成时定位结构化结果", () => {
     vi.useFakeTimers();
     const { rerender } = render(<ImportFeedback busy stage="正在检查" />);

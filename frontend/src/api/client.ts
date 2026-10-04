@@ -22,6 +22,8 @@ export type ReadModels = {
   operation: Schemas["Operation"];
   import: Schemas["ImportView"];
   "scan-plan": Schemas["ScanPlan"];
+  "source-trust": Schemas["Record"];
+  "source-trust-result": Schemas["Record"];
 };
 
 const storageKey = "reposteward-local-session";
@@ -130,6 +132,10 @@ type Commands = {
   "projects/inspect": [Schemas["ImportSource"], Schemas["Operation"]];
   "projects/plan": [Schemas["ImportPlanRequest"], Schemas["ImportPreview"]];
   "projects/apply": [Schemas["ImportApplyRequest"], Schemas["Operation"]];
+  "source-trust/check": [Schemas["CandidateRequest"], Schemas["Record"]];
+  "source-trust/save": [Schemas["TrustSaveRequest"], Schemas["Record"]];
+  "source-trust/revoke-check": [Schemas["CandidateRequest"], Schemas["Record"]];
+  "source-trust/revoke": [Schemas["TrustSaveRequest"], Schemas["Record"]];
 };
 export async function command<K extends keyof Commands>(
   action: K,
