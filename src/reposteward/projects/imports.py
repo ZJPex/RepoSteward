@@ -140,8 +140,14 @@ class ProjectImports:
         }
 
     def trust_revision(self, repository: str) -> str:
+        safety = self.operations.config.safety
         return digest(
-            self.operations.config.safety.tracked_sensitive_paths_for(repository)
+            {
+                "rules": safety.tracked_sensitive_paths_for(repository),
+                "revision": dict(safety.source_trust_revisions).get(
+                    repository.casefold(), ""
+                ),
+            }
         )
 
     def verify_trust(self, plan: dict):
@@ -223,6 +229,18 @@ class ProjectImports:
                 "INSERT OR IGNORE INTO project_import_steps VALUES (?,?,?,?,?)",
                 (plan_id, stage, encoded(body), digest(body), utc_now()),
             )
+
+    def source_identity(self, import_id: str) -> dict:
+        self.draft(import_id)
+        store = self.operations.store()
+        with store._connection() as db:
+            row = db.execute(
+                "SELECT p.id FROM local_operation_plans p JOIN project_import_steps s ON s.plan_id=p.id AND s.stage='source_identity' WHERE p.scope_key=? AND p.account_digest=? ORDER BY p.created_at DESC LIMIT 1",
+                (import_id, self.account),
+            ).fetchone()
+        if row is None:
+            raise ProjectError("缺少已识别的本地仓库身份，请重新识别项目。")
+        return self.step(store, row["id"], "source_identity")
 
     def show(self, import_id: str) -> dict:
         draft = self.draft(import_id)
@@ -453,15 +471,33 @@ class ProjectImports:
             if previous:
                 return {"status": "completed", "import_id": draft["id"], **previous}
             source = draft["source"]
-            local = (
-                self.local_snapshot(source["value"])
+            meta = (
+                workspace_metadata(Path(source["value"]))
                 if source["kind"] == "local_path"
                 else None
             )
-            remote = local or normalize_remote(source["value"])
+            remote = meta or normalize_remote(source["value"])
             if remote["host"] != self.host:
                 raise ProjectError("local origin host differs from the current account")
+            local, blocked = None, None
+            if meta:
+                try:
+                    local = self.local_snapshot(source["value"])
+                except ImportDiagnosticsError as exc:
+                    blocked = exc
             facts = remote_facts(client, self.host, remote["repository"], guard)
+            if meta:
+                if workspace_metadata(Path(source["value"])) != meta:
+                    raise ProjectError("workspace identity changed during inspection")
+                self.record(
+                    store,
+                    plan_id,
+                    "source_identity",
+                    {"workspace": meta, "remote": facts},
+                    guard,
+                )
+            if blocked is not None:
+                raise blocked
             if local and self.local_snapshot(local["root"], facts) != local:
                 raise ProjectError("workspace changed during inspection")
             result = {"remote": facts, "workspace": local, "observed_at": utc_now()}

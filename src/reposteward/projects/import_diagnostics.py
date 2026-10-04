@@ -4,6 +4,7 @@ import stat
 import time
 from pathlib import Path
 
+from reposteward.core.source_rules import rule_coverage
 from reposteward.projects.registry import ProjectError, local_git, workspace_state
 from reposteward.projects.source_trust import candidate
 from reposteward.storage import snapshots
@@ -17,29 +18,6 @@ class ImportDiagnosticsError(ProjectError):
     def __init__(self, diagnostics: dict):
         super().__init__("导入检查未通过，请查看拒绝项。")
         self.diagnostics = diagnostics
-
-
-def rule_coverage(name: str, rules: tuple[str, ...]) -> list[dict]:
-    parts = tuple(part.casefold() for part in Path(name).parts)
-    return [
-        {
-            "path": rule.removeprefix(":file:"),
-            "kind": "file"
-            if rule.startswith(":file:") or len(prefix) == len(parts)
-            else "directory",
-        }
-        for rule in rules
-        if (
-            prefix := tuple(
-                part.casefold() for part in rule.removeprefix(":file:").split("/")
-            )
-        )
-        and (
-            name == rule.removeprefix(":file:")
-            if rule.startswith(":file:")
-            else parts[: len(prefix)] == prefix
-        )
-    ]
 
 
 def rejection(root: Path, name: str, tracked: bool, rules: tuple[str, ...]) -> dict:

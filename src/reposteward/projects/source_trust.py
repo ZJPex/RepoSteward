@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import replace
 from pathlib import Path
 
 import tomlkit
 
-from reposteward.core.config import ConfigError, _tracked_sensitive_paths
+from reposteward.core.config import (
+    ConfigError,
+    _tracked_sensitive_paths,
+    source_trust_revisions,
+)
 from reposteward.core.source_files import SOURCE_SUFFIXES, source_digest
+from reposteward.core.source_rules import exact_rule, matches_rule
 from reposteward.core.trusted_config import ConfigTrustStore, sha
 from reposteward.projects.registry import (
     ProjectError,
@@ -43,12 +47,12 @@ def candidate(root: Path, path: str) -> dict:
             raise ProjectError("文件必须已由当前仓库精确跟踪。")
         DockerVerifier._validate_allowlisted_sensitive_source(root / path, relative)
         entries, _ = _entries(
-            root, trusted_sensitive_paths=(":file:" + path,), names={path: True}
+            root, trusted_sensitive_paths=(exact_rule(path),), names={path: True}
         )
         if source_digest(root, path) != entries[0]["digest"]:
             raise ProjectError("文件检查期间发生变化，请重试。")
         again, _ = _entries(
-            root, trusted_sensitive_paths=(":file:" + path,), names={path: True}
+            root, trusted_sensitive_paths=(exact_rule(path),), names={path: True}
         )
         if entries != again:
             raise ProjectError("文件检查期间发生变化，请重试。")
@@ -92,6 +96,13 @@ class SourceTrust:
         meta = workspace_metadata(Path(target))
         if meta["host"] != self.operations.imports.host:
             raise ProjectError("仓库主机与当前账户不一致。")
+        if source["kind"] == "local_path":
+            identified = self.operations.imports.source_identity(import_id)
+            if (
+                meta != identified["workspace"]
+                or meta["identity"] not in identified["remote"]["aliases"]
+            ):
+                raise ProjectError("本地仓库身份已变化，请重新识别项目。")
         if source["kind"] == "github_url":
             view = self.operations.imports.show(import_id)
             remote = (view.get("inspection") or {}).get("remote")
@@ -152,13 +163,7 @@ class SourceTrust:
             legacy = dict(safety.tracked_sensitive_paths).get(repository, ())
             items = []
             for path in exact:
-                coverage = [
-                    rule
-                    for rule in legacy
-                    if DockerVerifier._is_allowlisted_tracked_sensitive_path(
-                        Path(path), (rule,)
-                    )
-                ]
+                coverage = [rule for rule in legacy if matches_rule(path, rule)]
                 items.append(
                     {
                         "path": path,
@@ -234,41 +239,8 @@ class SourceTrust:
                 storage.put(identity, request, result)
                 return result
 
-    def check_other_layers(self):
-        workbench = self.operations.workbench
-        user_path = self.storage().path
-        for path, previous in zip(workbench.config_files, workbench.config_signatures):
-            if path != user_path:
-                stat = path.stat()
-                if (stat.st_ino, stat.st_size, stat.st_mtime_ns) != previous:
-                    raise ProjectError("其它配置已变化，请重新打开工作台。")
-
     def adopt(self, after: bytes):
-        self.check_other_layers()
-        if self.storage().read() != after:
-            raise ProjectError("用户配置在保存后发生变化，请核对真实授权状态。")
-        operations, workbench = self.operations, self.operations.workbench
-        safety = tomlkit.parse(after.decode("utf-8")).get("safety", {})
-        config = replace(
-            operations.config,
-            safety=replace(
-                operations.config.safety,
-                trusted_source_files=_tracked_sensitive_paths(
-                    safety.get("trusted_source_files", {})
-                ),
-            ),
-        )
-        operations.config = workbench.config = config
-        workbench.tasks_service.config = config
-        signatures = list(workbench.config_signatures)
-        path = self.storage().path
-        info = path.stat()
-        signature = (info.st_ino, info.st_size, info.st_mtime_ns)
-        if self.storage().read() != after:
-            raise ProjectError("用户配置保存后变化，请重新打开工作台。")
-        signatures[workbench.config_files.index(path)] = signature
-        workbench.config_signatures = signatures
-        workbench.check_configuration()
+        self.operations.workbench.adopt_source_trust(self.storage(), after)
 
     def save(
         self,
@@ -297,11 +269,14 @@ class SourceTrust:
                 uuid.NAMESPACE_URL, operations.account + ":trust-save:" + key
             ).hex
             with storage.locked():
+                storage.reconcile(storage.read())
                 old = storage.get(identity)
                 if old:
                     if old["request"] != request:
                         raise ProjectError("idempotency_conflict")
                     if old["saved"]:
+                        if sha(storage.read()) == old["after_digest"]:
+                            self.adopt(storage.read())
                         return old
                     current = storage.read()
                     if sha(current) == old["after_digest"]:
@@ -371,11 +346,18 @@ class SourceTrust:
                     "saved": False,
                     "before_digest": sha(before),
                     "after_digest": sha(after),
+                    "after_revision": dict(
+                        source_trust_revisions(
+                            tomlkit.parse(after.decode("utf-8"))["safety"][
+                                "source_trust_revisions"
+                            ]
+                        )
+                    )[repository.casefold()],
                     "public_write": False,
                     "plan_generated": False,
                 }
                 storage.put(identity, request, result)
-                self.check_other_layers()
+                operations.workbench.verify_other_config(storage.path)
                 storage.replace(before, after)
                 self.adopt(after)
                 result["saved"] = True
@@ -383,13 +365,14 @@ class SourceTrust:
                 return result
 
     def status(self, request_id: str) -> dict:
-        result = self.storage().get(request_id)
+        storage = self.storage()
+        with storage.locked():
+            storage.reconcile(storage.read())
+            result = storage.get(request_id)
         if (
             not result
             or "saved" not in result
             or result.get("account_digest") != self.operations.account
         ):
             raise KeyError("源码授权保存记录不存在。")
-        if not result["saved"] and sha(self.storage().read()) == result["after_digest"]:
-            return {**result, "saved": True}
         return result
