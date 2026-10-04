@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from reposteward.github.client import GitHubReadError
 from reposteward.projects.clone import clone_ssh, directory_identity, publish_directory
 from reposteward.projects.identity import PURPOSES
+from reposteward.projects.import_diagnostics import ImportDiagnosticsError, diagnose
 from reposteward.projects.registry import (
     ProjectError,
     local_git,
@@ -20,6 +21,7 @@ from reposteward.projects.registry import (
 from reposteward.storage.local_queue import digest, encoded, enqueue, hex_id
 from reposteward.storage.snapshots import workspace_snapshot
 from reposteward.storage.store import utc_now
+from reposteward.verification.verifier import VerificationError
 
 
 def source_input(kind: str, value: str, host: str) -> dict:
@@ -126,12 +128,14 @@ class ProjectImports:
             meta["repository"]
         )
         root = Path(meta["root"])
+        try:
+            snapshot = workspace_snapshot(root, trusted_sensitive_paths=trusted_paths)
+        except (ProjectError, VerificationError, OSError) as exc:
+            raise ImportDiagnosticsError(diagnose(root, trusted_paths)) from exc
         return {
             **meta,
             "state": workspace_state(root),
-            "content_digest": workspace_snapshot(
-                root, trusted_sensitive_paths=trusted_paths
-            )["digest"],
+            "content_digest": snapshot["digest"],
         }
 
     def trust_revision(self, repository: str) -> str:
@@ -609,6 +613,8 @@ class ProjectImports:
 
 
 def import_problem(exc: Exception) -> tuple[str, str]:
+    if isinstance(exc, ImportDiagnosticsError):
+        return "import_rejected", "导入检查未通过，请查看拒绝项及检查完整性。"
     message = str(exc).casefold()
     for words, code, text in (
         (

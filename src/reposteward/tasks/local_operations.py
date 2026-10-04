@@ -666,6 +666,7 @@ class LocalOperations:
                                 "status": "failed",
                                 "error_code": code,
                                 "message": message,
+                                "diagnostics": getattr(exc, "diagnostics", None),
                             }
                             db.execute(
                                 "INSERT OR IGNORE INTO local_operation_results VALUES (?,?,?,?,?,?)",

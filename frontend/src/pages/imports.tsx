@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { command, useRead } from "../api/client";
 import { Badge, Detail, Notice, ReadState } from "../components";
+import { ImportFeedback, type ImportDiagnostics } from "./import-feedback";
 
 const obj = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value)
@@ -26,9 +27,18 @@ export function ImportPage() {
     "maintain",
   );
   const [target, setTarget] = useState("");
+  const submitting = useRef(false);
   const session = useRead("session");
   const query = useRead("import", { import_id: importId }, Boolean(importId));
   const data = query.data;
+  const sourceKind = data?.source.kind;
+  const sourceValue = data?.source.value;
+  useEffect(() => {
+    if (sourceKind && sourceValue) {
+      setKind(sourceKind);
+      setValue(sourceValue);
+    }
+  }, [sourceKind, sourceValue]);
   const inspection = obj(data?.inspection);
   const remote = obj(inspection.remote);
   const local = obj(inspection.workspace);
@@ -54,6 +64,7 @@ export function ImportPage() {
   const inspect = useMutation({
     mutationFn: () => command("projects/inspect", { kind, value }),
     onSuccess: (op) => navigate(`/imports/${op.import_id}`),
+    onSettled: () => { submitting.current = false; },
   });
   const plan = useMutation({
     mutationFn: () =>
@@ -65,6 +76,7 @@ export function ImportPage() {
         target: method === "watch" ? "" : target || str(local.root),
       }),
     onSuccess: () => query.refetch(),
+    onSettled: () => { submitting.current = false; },
   });
   const apply = useMutation({
     mutationFn: () =>
@@ -76,6 +88,8 @@ export function ImportPage() {
     onSuccess: () => query.refetch(),
   });
   const error = inspect.error || plan.error || apply.error;
+  const failure = obj(latest?.stages.find(stage => stage.stage === "failure")?.result);
+  const diagnostics = (obj(plan.error).diagnostics || failure.diagnostics) as ImportDiagnostics | undefined;
   return (
     <>
       <header className="page-heading">
@@ -86,11 +100,13 @@ export function ImportPage() {
       {!canManage && (
         <Notice>当前会话仅允许读取。请以管理模式重新打开本地工作台。</Notice>
       )}
-      {!importId ? (
+      {!importId || (!data?.inspection && latest?.state === "failed") ? (
         <form
           className="panel import-form"
           onSubmit={(e) => {
             e.preventDefault();
+            if (submitting.current || busy || inspect.isPending) return;
+            submitting.current = true;
             inspect.mutate();
           }}
         >
@@ -120,6 +136,7 @@ export function ImportPage() {
           <button disabled={!canManage || inspect.isPending} type="submit">
             识别项目
           </button>
+          <ImportFeedback busy={inspect.isPending} stage="正在提交识别请求" message={inspect.error?.message || str(failure.message)} diagnostics={diagnostics} />
           <p className="muted">
             识别只读取仓库信息；凭据由宿主 GitHub 连接提供。
           </p>
@@ -136,6 +153,7 @@ export function ImportPage() {
               <Badge value={latest.state} />{" "}
               <Link to={`/operations/${latest.id}`}>查看执行记录与重试</Link>
               {busy && <p role="status">操作已保存，刷新页面后可继续查看。</p>}
+              <ImportFeedback busy={busy} stage={latest.state === "pending" ? "等待开始操作" : latest.action === "project.inspect" ? "正在识别仓库并检查工作区" : "正在执行已确认的导入"} message={latest.action === "project.inspect" && latest.state === "completed" ? "识别已完成，请选择关联方式。" : undefined} />
               {latest.state === "failed" && (
                 <Notice>
                   操作未完成。请查看执行记录，修复连接或路径后重试；如果项目或目录已经变化，请重新识别并生成计划。
@@ -171,6 +189,8 @@ export function ImportPage() {
                 className="panel import-form"
                 onSubmit={(e) => {
                   e.preventDefault();
+                  if (submitting.current || busy || plan.isPending) return;
+                  submitting.current = true;
                   plan.mutate();
                 }}
               >
@@ -222,6 +242,7 @@ export function ImportPage() {
                 <button disabled={!canManage || busy || plan.isPending}>
                   生成导入计划
                 </button>
+                <ImportFeedback busy={plan.isPending} stage="正在检查工作区并生成计划" message={plan.error?.message || (plan.isSuccess ? "导入计划已生成，请确认计划。" : undefined)} diagnostics={diagnostics} />
               </form>
               {data.preview && (
                 <section className="panel import-panel">
@@ -286,7 +307,7 @@ export function ImportPage() {
           </p>
         </>
       )}
-      {error && <Notice>{error.message}</Notice>}
+      {error && apply.error && <Notice>{error.message}</Notice>}
     </>
   );
 }

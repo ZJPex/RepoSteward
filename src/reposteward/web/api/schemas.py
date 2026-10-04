@@ -30,6 +30,7 @@ class ErrorDetail(BaseModel):
     message: str
     request_id: str = ""
     retryable: bool = False
+    diagnostics: dict[str, JsonValue] | None = None
 
 
 class ErrorResponse(BaseModel):
