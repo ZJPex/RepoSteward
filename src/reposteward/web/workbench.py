@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import re
 import shlex
+import tomllib
+from dataclasses import replace
 from pathlib import Path
 from threading import RLock
 from urllib.parse import urlsplit
 
-from reposteward.core.config import AppConfig
+from reposteward.core.config import (
+    AppConfig,
+    _tracked_sensitive_paths,
+    source_trust_revisions,
+)
 from reposteward.core.runtime import local_diagnostics
 from reposteward.projects.registry import ProjectError, ProjectRegistry
 from reposteward.projects.understanding import Understanding
@@ -54,6 +60,44 @@ class Workbench:
         except OSError:
             pass
         raise TaskConflict("configuration changed; restart the local workbench")
+
+    def verify_other_config(self, user_path: Path):
+        """授权写入只允许接纳用户配置一项，其它层沿用原签名。"""
+        for path, previous in zip(self.config_files, self.config_signatures):
+            if path != user_path:
+                info = path.stat()
+                if (info.st_ino, info.st_size, info.st_mtime_ns) != previous:
+                    raise TaskConflict("其它配置已变化，请重新打开工作台。")
+
+    def adopt_source_trust(self, storage, after: bytes):
+        """核验真实落盘内容后，统一更新配置使用者与单项签名。"""
+        with self.trust_lock:
+            self.verify_other_config(storage.path)
+            if storage.read() != after:
+                raise TaskConflict("用户配置保存后变化，请重新打开工作台。")
+            safety = tomllib.loads(after.decode("utf-8")).get("safety", {})
+            updated = replace(
+                self.config,
+                safety=replace(
+                    self.config.safety,
+                    trusted_source_files=_tracked_sensitive_paths(
+                        safety.get("trusted_source_files", {})
+                    ),
+                    source_trust_revisions=source_trust_revisions(
+                        safety.get("source_trust_revisions", {})
+                    ),
+                ),
+            )
+            info = storage.path.stat()
+            signature = (info.st_ino, info.st_size, info.st_mtime_ns)
+            if storage.read() != after:
+                raise TaskConflict("用户配置保存后变化，请重新打开工作台。")
+            signatures = list(self.config_signatures)
+            signatures[self.config_files.index(storage.path)] = signature
+            self.verify_other_config(storage.path)
+            self.config = self.tasks_service.config = updated
+            self.config_signatures = signatures
+            self.check_configuration()
 
     def _command(self, *arguments: str) -> str:
         return shlex.join(

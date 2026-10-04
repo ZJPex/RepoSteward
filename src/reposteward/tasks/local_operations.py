@@ -55,7 +55,7 @@ def revision(task: dict) -> str:
 
 class LocalOperations:
     def __init__(self, workbench: Workbench, *, client_factory=GitHubClient):
-        self.workbench, self.config = workbench, workbench.config
+        self.workbench = workbench
         self.account = account_key(self.config)
         self.path = self.config.state_dir / "reposteward.sqlite3"
         self.client_factory = client_factory
@@ -65,6 +65,10 @@ class LocalOperations:
         self.imports = ProjectImports(self)
         self.source_trust = SourceTrust(self)
         self.scans = WorkspaceScans(self)
+
+    @property
+    def config(self):
+        return self.workbench.config
 
     def store(self, *, write: bool = False) -> Store | None:
         self.workbench.check_configuration()

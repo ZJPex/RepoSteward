@@ -9,12 +9,17 @@ import os
 import sqlite3
 import stat
 import tempfile
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
 import tomlkit
 
-from reposteward.core.config import ConfigError, _tracked_sensitive_paths
+from reposteward.core.config import (
+    ConfigError,
+    _tracked_sensitive_paths,
+    source_trust_revisions,
+)
 
 
 def sha(data: bytes) -> str:
@@ -87,6 +92,36 @@ class ConfigTrustStore:
                 (identity, request, json.dumps(body)),
             )
 
+    def reconcile(self, current: bytes):
+        """新写入前先固化未完成结果，无法判定的状态不伪装成失败。"""
+        current_hash = sha(current)
+        revisions = dict(
+            source_trust_revisions(
+                tomlkit.parse(current.decode("utf-8"))
+                .get("safety", {})
+                .get("source_trust_revisions", {})
+            )
+        )
+        with self.ledger() as db:
+            rows = db.execute("SELECT id,body FROM requests").fetchall()
+            for row in rows:
+                body = json.loads(row["body"])
+                if "saved" not in body or body["saved"] is True:
+                    continue
+                after_revision = body.get("after_revision")
+                revision_matches = (
+                    after_revision
+                    and revisions.get(body["repository"].casefold()) == after_revision
+                )
+                if current_hash == body["after_digest"] or revision_matches:
+                    body.update(saved=True, outcome="saved")
+                else:
+                    body.update(saved=None, outcome="unknown")
+                db.execute(
+                    "UPDATE requests SET body=? WHERE id=?",
+                    (json.dumps(body), row["id"]),
+                )
+
     def render(
         self, before: bytes, repository: str, paths: list[str], mode: str
     ) -> bytes:
@@ -111,6 +146,12 @@ class ConfigTrustStore:
         elif existing in rules:
             del rules[existing]
         _tracked_sensitive_paths(dict(rules))
+        revisions = safety.setdefault("source_trust_revisions", tomlkit.table())
+        revision_key = next(
+            (name for name in revisions if name.casefold() == repository.casefold()),
+            repository.casefold(),
+        )
+        revisions[revision_key] = uuid.uuid4().hex
         return tomlkit.dumps(document).encode("utf-8")
 
     def replace(self, before: bytes, after: bytes):
