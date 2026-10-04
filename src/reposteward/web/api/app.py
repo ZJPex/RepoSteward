@@ -86,10 +86,21 @@ class LocalSession:
         return "http://" + self.authority
 
 
-def error(status: int, code: str, message: str, request_id: str = "") -> JSONResponse:
+def error(
+    status: int,
+    code: str,
+    message: str,
+    request_id: str = "",
+    diagnostics: dict | None = None,
+) -> JSONResponse:
     return JSONResponse(
         dto.ErrorResponse(
-            error=dto.ErrorDetail(code=code, message=message, request_id=request_id)
+            error=dto.ErrorDetail(
+                code=code,
+                message=message,
+                request_id=request_id,
+                diagnostics=diagnostics,
+            )
         ).model_dump(),
         status_code=status,
         headers=SECURITY_HEADERS,
@@ -297,7 +308,9 @@ def create_app(
             from reposteward.projects.imports import import_problem
 
             code, message = import_problem(exc)
-            return error(409, code, message)
+            return error(
+                409, code, message, diagnostics=getattr(exc, "diagnostics", None)
+            )
         if isinstance(exc, ProjectError):
             return error(
                 409, "binding_or_policy", "项目绑定或策略不可用，请检查关联与配置。"

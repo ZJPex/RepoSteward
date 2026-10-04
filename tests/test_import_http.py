@@ -273,6 +273,103 @@ class ImportTrustedSourceHTTPTests(unittest.TestCase):
         self.plan(self.inspect(local=False), status=409)
         self.assert_unregistered()
 
+    def test_diagnostics_are_structured_complete_and_shared_by_both_entries(self):
+        self.add_source("src/credentials/second.py")
+        self.add_source(".env", "TOKEN=private-fixture-never-return\n")
+        before = git(self.repo, "status", "--porcelain=v1")
+        local = self.inspect(state="failed")
+        failure = next(
+            stage["result"]
+            for stage in local["operations"][0]["stages"]
+            if stage["stage"] == "failure"
+        )
+        diagnostics = failure["diagnostics"]
+        self.assertTrue(diagnostics["complete"])
+        entries = {item["path"]: item for item in diagnostics["items"]}
+        self.assertEqual(
+            set(entries), {self.source, "src/credentials/second.py", ".env"}
+        )
+        self.assertTrue(entries[self.source]["can_request_exception"])
+        self.assertFalse(entries[".env"]["can_request_exception"])
+        self.assertNotEqual(entries[".env"]["reason"], entries[self.source]["reason"])
+        current = self.inspect(local=False)
+        response = self.client.post(
+            "/api/v1/commands/projects/plan",
+            headers={**self.headers, "Idempotency-Key": "diagnose"},
+            json={
+                "import_id": current["id"],
+                "inspection_id": current["inspection_id"],
+                "method": "link",
+                "purpose": "maintain",
+                "target": str(self.repo),
+            },
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["error"]["diagnostics"], diagnostics)
+        self.assertNotIn("private-fixture-never-return", response.text)
+        self.assertEqual(git(self.repo, "status", "--porcelain=v1"), before)
+        self.assert_unregistered()
+
+    def test_diagnostics_limit_does_not_claim_complete_or_create_plan(self):
+        self.add_source("src/credentials/second.py")
+        with patch("reposteward.projects.import_diagnostics.MAX_DIAGNOSTIC_ITEMS", 1):
+            current = self.inspect(state="failed")
+        failure = next(
+            stage["result"]
+            for stage in current["operations"][0]["stages"]
+            if stage["stage"] == "failure"
+        )
+        self.assertFalse(failure["diagnostics"]["complete"])
+        self.assertEqual(failure["diagnostics"]["reason"], "scan_limit")
+        self.assertEqual(len(failure["diagnostics"]["items"]), 1)
+        self.assertIsNone(current["preview"])
+        self.assert_unregistered()
+
+    def test_diagnostics_report_existing_directory_coverage_without_exception(self):
+        self.allow(("src/credentials",))
+        self.add_source("src/credentials/.env", "TOKEN=private-fixture\n")
+        current = self.inspect(state="failed")
+        failure = next(
+            stage["result"]
+            for stage in current["operations"][0]["stages"]
+            if stage["stage"] == "failure"
+        )
+        item = failure["diagnostics"]["items"][0]
+        self.assertEqual(
+            item["coverage"], [{"path": "src/credentials", "kind": "directory"}]
+        )
+        self.assertFalse(item["can_request_exception"])
+
+    def test_diagnostics_byte_budget_stops_even_when_files_are_rejected(self):
+        self.add_source("src/credentials/second.py", "x" * 128)
+        with patch("reposteward.storage.snapshots.MAX_SNAPSHOT_BYTES", 100):
+            current = self.inspect(state="failed")
+        failure = next(
+            stage["result"]
+            for stage in current["operations"][0]["stages"]
+            if stage["stage"] == "failure"
+        )
+        self.assertFalse(failure["diagnostics"]["complete"])
+        self.assertEqual(failure["diagnostics"]["reason"], "byte_limit")
+
+    def test_diagnostics_sensitive_link_has_specific_reason_and_is_not_eligible(self):
+        target = self.repo / self.source
+        target.unlink()
+        target.symlink_to(self.repo / "README.md")
+        current = self.inspect(state="failed")
+        failure = next(
+            stage["result"]
+            for stage in current["operations"][0]["stages"]
+            if stage["stage"] == "failure"
+        )
+        item = next(
+            item
+            for item in failure["diagnostics"]["items"]
+            if item["path"] == self.source
+        )
+        self.assertEqual(item["reason"], "symlink")
+        self.assertFalse(item["can_request_exception"])
+
     def test_both_sources_link_once_preserve_dirty_files_and_repeat_apply(self):
         self.allow(repository_name="OWNER/REPO")
         dirty = self.repo / self.source
