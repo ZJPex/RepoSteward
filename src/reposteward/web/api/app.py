@@ -27,10 +27,10 @@ from reposteward.tasks.external import TaskConflict
 from reposteward.tasks.local_operations import LocalOperations, OperationError
 from reposteward.web.api import schemas as dto
 from reposteward.web.api.assets import load_assets
-from reposteward.web.api.source_trust import routes as source_trust_routes
 from reposteward.web.api.imports import routes as import_routes
 from reposteward.web.api.operations import routes
 from reposteward.web.api.scans import routes as scan_routes
+from reposteward.web.api.source_trust import routes as source_trust_routes
 from reposteward.web.api.tasks import routes as task_routes
 from reposteward.web.workbench import Workbench
 
@@ -494,6 +494,7 @@ def create_app(
                     "/api/v1/operations": ("project_id", "before"),
                     "/api/v1/operation": ("operation_id",),
                     "/api/v1/import": ("import_id",),
+                    "/api/v1/source-trust-result": ("request_id",),
                     "/api/v1/task-preview": ("project_id", "run_id", "budget"),
                     "/api/v1/handoffs": ("project_id", "run_id"),
                     "/api/v1/handoff": ("project_id", "run_id", "handoff_id"),
@@ -515,4 +516,3 @@ if __name__ == "__main__":
     print(
         json.dumps(create_app().openapi(), ensure_ascii=False, indent=2, sort_keys=True)
     )
-

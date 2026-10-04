@@ -5,29 +5,12 @@ import time
 from pathlib import Path
 
 from reposteward.projects.registry import ProjectError, local_git, workspace_state
+from reposteward.projects.source_trust import candidate
 from reposteward.storage import snapshots
-from reposteward.verification.verifier import DockerVerifier, VerificationError
+from reposteward.verification.verifier import DockerVerifier
 
 MAX_DIAGNOSTIC_ITEMS = 500
 MAX_DIAGNOSTIC_SECONDS = 30
-SOURCE_SUFFIXES = {
-    ".py",
-    ".js",
-    ".jsx",
-    ".ts",
-    ".tsx",
-    ".go",
-    ".rs",
-    ".java",
-    ".c",
-    ".h",
-    ".cpp",
-    ".cs",
-    ".rb",
-    ".sh",
-    ".vue",
-    ".svelte",
-}
 
 
 class ImportDiagnosticsError(ProjectError):
@@ -39,10 +22,23 @@ class ImportDiagnosticsError(ProjectError):
 def rule_coverage(name: str, rules: tuple[str, ...]) -> list[dict]:
     parts = tuple(part.casefold() for part in Path(name).parts)
     return [
-        {"path": rule, "kind": "file" if len(prefix) == len(parts) else "directory"}
+        {
+            "path": rule.removeprefix(":file:"),
+            "kind": "file"
+            if rule.startswith(":file:") or len(prefix) == len(parts)
+            else "directory",
+        }
         for rule in rules
-        if (prefix := tuple(part.casefold() for part in rule.split("/")))
-        and parts[: len(prefix)] == prefix
+        if (
+            prefix := tuple(
+                part.casefold() for part in rule.removeprefix(":file:").split("/")
+            )
+        )
+        and (
+            name == rule.removeprefix(":file:")
+            if rule.startswith(":file:")
+            else parts[: len(prefix)] == prefix
+        )
     ]
 
 
@@ -71,12 +67,8 @@ def rejection(root: Path, name: str, tracked: bool, rules: tuple[str, ...]) -> d
         )
     elif DockerVerifier._sensitive_path(relative):
         code, message = "sensitive_path", "已跟踪路径名称命中敏感文件规则。"
-        if tracked and relative.suffix.casefold() in SOURCE_SUFFIXES:
-            try:
-                DockerVerifier._validate_allowlisted_sensitive_source(source, relative)
-                eligible = source.resolve().is_relative_to(root)
-            except (OSError, VerificationError):
-                pass
+        if tracked:
+            eligible = candidate(root, name)["valid"]
     return {
         "path": name,
         "reason": code,
@@ -134,7 +126,7 @@ def diagnose(root: Path, rules: tuple[str, ...]) -> dict:
                 snapshots._entries(
                     root, trusted_sensitive_paths=rules, names={name: tracked}
                 )
-            except (ProjectError, VerificationError, OSError):
+            except (ProjectError, OSError):
                 item = rejection(root, name, tracked, rules)
                 result["items"].append(item)
                 # 文件变化、读取失败与已放行源码的后续失败不能被当作完整检查。
@@ -148,6 +140,6 @@ def diagnose(root: Path, rules: tuple[str, ...]) -> dict:
             result["reason"] = "workspace_changed"
         elif result["items"]:
             result.update(complete=True, reason="completed")
-    except (ProjectError, VerificationError, OSError):
+    except (ProjectError, OSError):
         pass
     return result

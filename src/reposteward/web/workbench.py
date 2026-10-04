@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import re
 import shlex
-from threading import RLock
 from pathlib import Path
+from threading import RLock
 from urllib.parse import urlsplit
 
 from reposteward.core.config import AppConfig

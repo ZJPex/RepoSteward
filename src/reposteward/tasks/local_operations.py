@@ -16,10 +16,10 @@ from urllib.parse import urlsplit
 
 from reposteward.github.client import GitHubClient, GitHubReadError
 from reposteward.github.sync import GitHubSync, account_key, observations
-from reposteward.projects.source_trust import SourceTrust
 from reposteward.projects.imports import ProjectImports, import_problem
 from reposteward.projects.registry import ProjectError
 from reposteward.projects.scans import WorkspaceScans
+from reposteward.projects.source_trust import SourceTrust
 from reposteward.storage.local_queue import (
     ASSISTANCE_ACTIONS,
     digest,

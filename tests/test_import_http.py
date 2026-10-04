@@ -481,14 +481,15 @@ class ImportTrustedSourceHTTPTests(unittest.TestCase):
             status=409,
         )
         self.reload()
-        result = self.apply(current, preview, state="failed")
         self.command(
-            "operations/retry",
-            {"operation_id": result["id"], "expected_revision": result["revision"]},
+            "projects/apply",
+            {
+                "import_id": current["id"],
+                "preview_id": preview["id"],
+                "expected_digest": preview["digest"],
+            },
+            status=409,
         )
-        self.operations.process_once()
-        result = self.operations.operation(result["id"])
-        self.assertEqual(result["state"], "failed")
         self.assert_unregistered()
 
     def test_watch_needs_neither_local_snapshot_nor_execution_policy(self):

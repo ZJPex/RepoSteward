@@ -28,10 +28,18 @@ class ConfigTrustStore:
     @contextmanager
     def locked(self):
         self.state.mkdir(parents=True, exist_ok=True)
-        fd = os.open(self.state / "trust.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        fd = os.open(
+            self.path.with_name("." + self.path.name + ".source-trust.lock"),
+            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+            0o600,
+        )
         with os.fdopen(fd, "r+") as handle:
             info = os.fstat(handle.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_mode & 0o022
+            ):
                 raise ConfigError("源码授权锁权限不安全。")
             fcntl.flock(handle, fcntl.LOCK_EX)
             yield
@@ -42,7 +50,9 @@ class ConfigTrustStore:
         db = sqlite3.connect(self.state / "trust.sqlite3")
         db.row_factory = sqlite3.Row
         try:
-            db.execute("CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, request TEXT NOT NULL, body TEXT NOT NULL)")
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, request TEXT NOT NULL, body TEXT NOT NULL)"
+            )
             yield db
             db.commit()
         finally:
@@ -60,21 +70,33 @@ class ConfigTrustStore:
         if not (self.state / "trust.sqlite3").exists():
             return None
         with self.ledger() as db:
-            row = db.execute("SELECT body FROM requests WHERE id=?", (identity,)).fetchone()
+            row = db.execute(
+                "SELECT body FROM requests WHERE id=?", (identity,)
+            ).fetchone()
         return json.loads(row[0]) if row else None
 
     def put(self, identity: str, request: str, body: dict):
         with self.ledger() as db:
-            old = db.execute("SELECT request FROM requests WHERE id=?", (identity,)).fetchone()
+            old = db.execute(
+                "SELECT request FROM requests WHERE id=?", (identity,)
+            ).fetchone()
             if old and old[0] != request:
                 raise ConfigError("idempotency_conflict")
-            db.execute("INSERT OR REPLACE INTO requests VALUES (?,?,?)", (identity, request, json.dumps(body)))
+            db.execute(
+                "INSERT OR REPLACE INTO requests VALUES (?,?,?)",
+                (identity, request, json.dumps(body)),
+            )
 
-    def render(self, before: bytes, repository: str, paths: list[str], mode: str) -> bytes:
+    def render(
+        self, before: bytes, repository: str, paths: list[str], mode: str
+    ) -> bytes:
         document = tomlkit.parse(before.decode("utf-8"))
         safety = document.setdefault("safety", tomlkit.table())
         rules = safety.setdefault("trusted_source_files", tomlkit.table())
-        existing = next((name for name in rules if name.casefold() == repository.casefold()), repository.casefold())
+        existing = next(
+            (name for name in rules if name.casefold() == repository.casefold()),
+            repository.casefold(),
+        )
         values = list(rules.get(existing, []))
         if mode == "add":
             values = list(dict.fromkeys([*values, *paths]))
@@ -98,14 +120,20 @@ class ConfigTrustStore:
             raise ConfigError("用户配置已并发修改，请重新检查。")
         temporary = None
         try:
-            with tempfile.NamedTemporaryFile(dir=self.path.parent, prefix=".source-trust-", delete=False) as handle:
+            with tempfile.NamedTemporaryFile(
+                dir=self.path.parent, prefix=".source-trust-", delete=False
+            ) as handle:
                 temporary = Path(handle.name)
                 os.fchmod(handle.fileno(), stat.S_IMODE(original.st_mode))
                 handle.write(after)
                 handle.flush()
                 os.fsync(handle.fileno())
             current = self.path.lstat()
-            if (current.st_dev, current.st_ino, current.st_mtime_ns) != (original.st_dev, original.st_ino, original.st_mtime_ns) or self.read() != before:
+            if (current.st_dev, current.st_ino, current.st_mtime_ns) != (
+                original.st_dev,
+                original.st_ino,
+                original.st_mtime_ns,
+            ) or self.read() != before:
                 raise ConfigError("用户配置已并发修改，请重新检查。")
             os.replace(temporary, self.path)
             parent = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)

@@ -479,7 +479,9 @@ def _merge_layers(user: dict[str, Any], project: dict[str, Any]) -> dict[str, An
         merged_safety["forbidden_paths"] = list(dict.fromkeys(forbidden))
         trusted_paths = user_safety.get("tracked_sensitive_paths", {})
         merged_safety["tracked_sensitive_paths"] = trusted_paths
-        merged_safety["trusted_source_files"] = user_safety.get("trusted_source_files", {})
+        merged_safety["trusted_source_files"] = user_safety.get(
+            "trusted_source_files", {}
+        )
         merged_safety["workflow_grants"] = user_safety.get("workflow_grants", [])
         result["safety"] = merged_safety
 
@@ -923,7 +925,9 @@ def load_config(
         workflow_grants=_workflow_grants(
             _section(user_raw, "safety").get("workflow_grants")
         ),
-        trusted_source_files=_tracked_sensitive_paths(safety_raw.get("trusted_source_files")),
+        trusted_source_files=_tracked_sensitive_paths(
+            safety_raw.get("trusted_source_files")
+        ),
         tracked_sensitive_paths=_tracked_sensitive_paths(
             safety_raw.get("tracked_sensitive_paths")
         ),
