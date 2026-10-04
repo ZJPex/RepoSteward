@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { command, useRead } from "../api/client";
+import { command, read, useRead } from "../api/client";
 import { Badge, Detail, Notice, ReadState } from "../components";
 import { ImportFeedback, type ImportDiagnostics } from "./import-feedback";
+
+import { SourceTrustPanel } from "./source-trust";
 
 const obj = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value)
@@ -27,6 +29,8 @@ export function ImportPage() {
     "maintain",
   );
   const [target, setTarget] = useState("");
+  const [trustNotice, setTrustNotice] = useState("");
+  const [freshDiagnostics, setFreshDiagnostics] = useState<ImportDiagnostics>();
   const submitting = useRef(false);
   const session = useRead("session");
   const query = useRead("import", { import_id: importId }, Boolean(importId));
@@ -89,7 +93,36 @@ export function ImportPage() {
   });
   const error = inspect.error || plan.error || apply.error;
   const failure = obj(latest?.stages.find(stage => stage.stage === "failure")?.result);
-  const diagnostics = (obj(plan.error).diagnostics || failure.diagnostics) as ImportDiagnostics | undefined;
+  const diagnostics = (freshDiagnostics || obj(plan.error).diagnostics || failure.diagnostics) as ImportDiagnostics | undefined;
+  const trustTarget = sourceKind === "local_path" ? sourceValue || "" : target || str(local.root);
+  async function regenerateAfterTrust() {
+    setTrustNotice("源码信任配置已保存；正在重新检查，最终导入仍需单独确认。");
+    setFreshDiagnostics(undefined);
+    const operation = await command("projects/inspect", { kind: data!.source.kind, value: data!.source.value });
+    for (let attempt = 0; attempt < 240; attempt++) {
+      const current = await read("operation", { operation_id: operation.id });
+      if (current.state === "completed") {
+        const refreshed = await read("import", { import_id: String(operation.import_id) });
+        try {
+          await command("projects/plan", { import_id: refreshed.id, inspection_id: refreshed.inspection_id, method: "link", purpose, target: trustTarget });
+        } catch (error) {
+          setFreshDiagnostics(obj(error).diagnostics as ImportDiagnostics | undefined);
+          throw error;
+        }
+        setTrustNotice("源码信任配置已保存，新导入计划已生成。请审核后单独确认导入。");
+        navigate(`/imports/${refreshed.id}`);
+        await query.refetch();
+        return;
+      }
+      if (["failed", "cancelled", "interrupted"].includes(current.state)) {
+        const failure = obj(current.stages.find(stage => stage.stage === "failure")?.result);
+        setFreshDiagnostics(failure.diagnostics as ImportDiagnostics | undefined);
+        throw new Error(str(failure.message) || "重新识别未完成，请处理剩余拒绝项后重试。");
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    throw new Error("检查仍在进行，请在执行记录中核实结果后重试。");
+  }
   return (
     <>
       <header className="page-heading">
@@ -307,6 +340,13 @@ export function ImportPage() {
           </p>
         </>
       )}
+      {trustNotice && <p role="status">{trustNotice}</p>}
+      {importId && data && kind === sourceKind && value === sourceValue && trustTarget && method === "link" && !complete && <SourceTrustPanel
+        key={`${importId}:${trustTarget}`} importId={importId} target={trustTarget}
+        canManage={canManage && !busy} rejectedPaths={(diagnostics?.items || []).filter(item => item.can_request_exception).map(item => item.path)}
+        onSaved={regenerateAfterTrust}
+      />}
+      {freshDiagnostics && <ImportFeedback busy={false} stage="重新检查" diagnostics={freshDiagnostics} />}
       {error && apply.error && <Notice>{error.message}</Notice>}
     </>
   );

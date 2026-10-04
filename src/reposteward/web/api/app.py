@@ -37,6 +37,8 @@ from reposteward.web.workbench import Workbench
 COMMAND_PATHS = {
     "/api/v1/commands/source-trust/check",
     "/api/v1/commands/source-trust/save",
+    "/api/v1/commands/source-trust/revoke-check",
+    "/api/v1/commands/source-trust/revoke",
     "/api/v1/commands/tasks/handoff",
     "/api/v1/commands/tasks/acknowledge",
     "/api/v1/commands/tasks/verify",
@@ -494,6 +496,7 @@ def create_app(
                     "/api/v1/operations": ("project_id", "before"),
                     "/api/v1/operation": ("operation_id",),
                     "/api/v1/import": ("import_id",),
+                    "/api/v1/source-trust": ("import_id", "target"),
                     "/api/v1/source-trust-result": ("request_id",),
                     "/api/v1/task-preview": ("project_id", "run_id", "budget"),
                     "/api/v1/handoffs": ("project_id", "run_id"),

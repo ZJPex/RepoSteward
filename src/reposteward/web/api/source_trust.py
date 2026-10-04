@@ -1,6 +1,6 @@
 """明确的用户级授权动作，普通导入请求不能携带信任配置。"""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from reposteward.projects.registry import ProjectError
@@ -27,8 +27,8 @@ class TrustSaveRequest(BaseModel):
 def routes(service, *, manage_local):
     router = APIRouter(prefix="/api/v1")
 
-    def invoke(method, **kwargs):
-        if service is None or not manage_local:
+    def invoke(method, *, command=True, **kwargs):
+        if service is None or (command and not manage_local):
             raise OperationError("read_only", "当前会话仅允许读取。", 403)
         try:
             return envelope(getattr(service.source_trust, method)(**kwargs))
@@ -63,5 +63,27 @@ def routes(service, *, manage_local):
     )
     def status(request_id: ProjectID):
         return invoke("status", request_id=request_id)
+
+    @router.get(
+        "/source-trust", response_model=Response[Record], operation_id="sourceTrustList"
+    )
+    def listing(import_id: ProjectID, target: str = Query(default="", max_length=4096)):
+        return invoke("listing", command=False, import_id=import_id, target=target)
+
+    @router.post(
+        "/commands/source-trust/revoke-check",
+        response_model=Response[Record],
+        operation_id="checkSourceTrustRevoke",
+    )
+    def check_remove(request: CandidateRequest, key: Key):
+        return invoke("check_remove", **request.model_dump(), key=key)
+
+    @router.post(
+        "/commands/source-trust/revoke",
+        response_model=Response[Record],
+        operation_id="revokeSourceTrust",
+    )
+    def remove(request: TrustSaveRequest, key: Key):
+        return invoke("save", **request.model_dump(), key=key, mode="remove")
 
     return router
