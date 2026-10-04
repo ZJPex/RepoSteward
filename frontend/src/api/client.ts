@@ -71,6 +71,7 @@ export class ApiError extends Error {
     public status: number,
     public code: string,
     message: string,
+    public diagnostics?: Record<string, unknown>,
   ) {
     super(message);
   }
@@ -165,6 +166,7 @@ export async function command<K extends keyof Commands>(
       response.status,
       value.error?.code || "unavailable",
       value.error?.message || "操作请求失败；重试会复用请求编号。",
+      value.error?.diagnostics,
     );
   commandKeys.delete(identity);
   try {
